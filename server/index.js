@@ -1,6 +1,18 @@
-import expres from "express"
-const app=expres()
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
 
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled Rejection:', error);
+});
+
+import express from "express"
+import cors from "cors"
+const app=express()
+
+
+app.use(express.json())
+app.use(express.urlencoded({extended:true}))
 app.use(cors({
     origin:process.env.CORS_ORIGIN ?.split(",") || "http://localhost:5173",
     credentials:true,
@@ -10,7 +22,7 @@ app.use(cors({
 
 import videoGeneratingRoute from "./src/route/generateVideo.route.js"
 
-app.use("/api",videoGeneratingRoute)
+app.use("/api/generate-video-base64",videoGeneratingRoute)
 
 const PORT=8080;
 

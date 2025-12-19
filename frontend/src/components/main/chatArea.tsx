@@ -8,6 +8,7 @@ export interface Message {
   videoUrl?: string;
   timestamp: string;
   isLoading?: boolean;
+  attempts?: number;
 }
 
 interface ChatAreaProps {
@@ -22,6 +23,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   onUpdateMessages,
 }) => {
   const [input, setInput] = useState('');
+  const [isSending, setIsSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const handleSend = async () => {
@@ -31,7 +33,9 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     const trimmed = input.trim();
-    if (!trimmed) return;
+    if (!trimmed || isSending) return;
+
+    setIsSending(true);
 
     const newMessage: Message = {
       id: Date.now().toString(),
@@ -43,10 +47,11 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     const updatedMessages = [...messages, newMessage];
     onUpdateMessages(updatedMessages);
     setInput('');
+
     const loadingMessage: Message = {
       id: (Date.now() + 1).toString(),
       role: 'assistant',
-      content: 'Generating your video...',
+      content: 'Generating your video... This may take a few moments.',
       timestamp: new Date().toISOString(),
       isLoading: true,
     };
@@ -54,38 +59,80 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     onUpdateMessages([...updatedMessages, loadingMessage]);
 
     try {
-      const response = await axios.post('YOUR_BACKEND_API_URL/generate-video', {
-        prompt: trimmed,
-      }, {
-        responseType: 'blob', 
+      const response = await axios.post('http://localhost:8080/api/generate-video-base64', {
+        userPrompt: trimmed, 
       });
-      const videoBlob = new Blob([response.data], { type: 'video/mp4' });
-      const videoUrl = URL.createObjectURL(videoBlob);
+
+      console.log('Server response:', response.data);
+      
+      const responseData = response.data?.video;
+      
+      if (!responseData) {
+        throw new Error('Invalid response format from server');
+      }
+
+      const { video: videoUrl, message: serverMessage, attempts } = responseData;
+
+      if (!videoUrl) {
+        throw new Error('No video URL in response');
+      }
+
+      let messageContent = serverMessage || 'Here is your generated video:';
+
       const finalMessages = [...updatedMessages, loadingMessage].map((msg) =>
         msg.id === loadingMessage.id
           ? {
               ...msg,
-              content: 'Here is your generated video:',
-              videoUrl,
+              content: messageContent,
+              videoUrl: videoUrl, 
               isLoading: false,
+              attempts: attempts,
             }
           : msg
       );
       
       onUpdateMessages(finalMessages);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error generating video:', error);
+      
+      let errorMessage = 'Sorry, there was an error generating the video. Please try again.';
+      let errorDetails = '';
+      
+      if (error.response) {
+        const errorData = error.response.data;
+        
+        if (errorData?.message) {
+          errorMessage = errorData.message;
+        } else if (errorData?.error) {
+          errorMessage = errorData.error;
+        }
+        
+        if (errorData?.video?.attempts) {
+          errorDetails = ` (Failed after ${errorData.video.attempts} attempts)`;
+        }
+        
+        if (errorData?.video?.lastError) {
+          errorDetails += `\n\nError: ${errorData.video.lastError}`;
+        }
+      } else if (error.request) {
+        errorMessage = 'Cannot connect to server. Please check if the backend is running.';
+      } else {
+        errorMessage = error.message || errorMessage;
+      }
+      
       const finalMessages = [...updatedMessages, loadingMessage].map((msg) =>
         msg.id === loadingMessage.id
           ? {
               ...msg,
-              content: 'Sorry, there was an error generating the video. Please try again.',
+              content: errorMessage + errorDetails,
               isLoading: false,
             }
           : msg
       );
       
       onUpdateMessages(finalMessages);
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -95,6 +142,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({
       handleSend();
     }
   };
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -102,14 +150,16 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   const handleDownload = (videoUrl: string, messageId: string) => {
     const link = document.createElement('a');
     link.href = videoUrl;
-    link.download = `video-${messageId}.mp4`;
+    link.download = `animation-${messageId}.mp4`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
+  const isSendDisabled = !input.trim() || !activeChatId || isSending;
+
   return (
-    <div className="flex flex-col w-full  flex-1 bg-gray-950">
+    <div className="flex flex-col w-full flex-1 bg-gray-950">
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         {!activeChatId ? (
           <div className="flex items-center justify-center h-full text-gray-500 text-lg">
@@ -152,7 +202,8 @@ const ChatArea: React.FC<ChatAreaProps> = ({
                     <video
                       src={msg.videoUrl}
                       controls
-                      className="w-full rounded-lg"
+                      className="w-full rounded-lg bg-black"
+                      preload="metadata"
                     />
                     <button
                       onClick={() => handleDownload(msg.videoUrl!, msg.id)}
@@ -175,6 +226,14 @@ const ChatArea: React.FC<ChatAreaProps> = ({
                       </svg>
                       Download Video
                     </button>
+                    
+                    {msg.attempts && msg.attempts > 1 && (
+                      <div className="flex items-center justify-center gap-2 text-xs text-gray-400">
+                        <span className="inline-flex items-center px-2 py-1 rounded-full bg-yellow-900/30 text-yellow-400">
+                          ⚡ {msg.attempts} attempts
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -195,20 +254,30 @@ const ChatArea: React.FC<ChatAreaProps> = ({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={activeChatId ? "Type your prompt here..." : "Create a conversation to start"}
-            disabled={!activeChatId}
+            placeholder={activeChatId ? "Describe the animation you want to create..." : "Create a conversation to start"}
+            disabled={!activeChatId || isSending}
             className="flex-1 rounded-xl bg-gray-800 text-gray-100 px-4 py-3 text-sm 
               outline-none border border-gray-700 focus:border-blue-500 
               focus:ring-2 focus:ring-blue-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
           />
           <button
             onClick={handleSend}
-            disabled={!input.trim() || !activeChatId}
+            disabled={isSendDisabled}
             className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium
               disabled:bg-gray-600 disabled:cursor-not-allowed
-              hover:bg-blue-700 transition-colors"
+              hover:bg-blue-700 transition-colors flex items-center gap-2"
           >
-            Send
+            {isSending ? (
+              <>
+                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Generating...
+              </>
+            ) : (
+              'Send'
+            )}
           </button>
         </div>
       </div>

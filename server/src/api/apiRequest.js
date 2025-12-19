@@ -1,17 +1,15 @@
 import fs from 'fs';
+import { GoogleGenAI } from "@google/genai";
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const genAI = new GoogleGenAI({apiKey: process.env.GOOGLE_API_KEY});
 
-async function generateManimCodeREST(userPrompt) {
-  try {
-    const apiKey = process.env.GOOGLE_API_KEY ;
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
-
-    const systemPrompt = `You are a Manim (Mathematical Animation Engine) expert. Generate Python code using the Manim library based on the user's description.
+async function generateManimCodeREST(userPrompt, errorContext = null, attempt = 1) {
+  let systemPrompt = `You are a Manim (Mathematical Animation Engine) expert. Generate Python code using the Manim library based on the user's description.
 
 IMPORTANT REQUIREMENTS:
 1. The class name MUST be exactly "video" (lowercase)
@@ -21,37 +19,41 @@ IMPORTANT REQUIREMENTS:
 5. Only output valid Python code, no explanations or markdown
 6. Do not include any text before or after the code
 7. Do not wrap code in markdown code blocks
+8. Use Manim Community v0.19.0 syntax
+9. For Code objects, use file_name parameter instead of code parameter
+10. Avoid deprecated syntax and parameters
+11. Use Text() or MathTex() for displaying code snippets, not Code() class
 
-User's request: ${userPrompt}
+`;
 
-Generate only the Python code:`;
+  if (errorContext) {
+    systemPrompt += `
+⚠️ PREVIOUS ATTEMPT FAILED WITH ERROR:
+${errorContext}
 
-    console.log('Generating Manim code...');
+Please analyze the error and generate CORRECTED code. Common fixes:
+- Replace Code(code="...") with Text("...") or MathTex("...")
+- Use proper Manim v0.19.0 syntax
+- Avoid deprecated methods and parameters
+- Check class inheritance and method signatures
 
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{ text: systemPrompt }]
-        }],
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 2048
-        }
-      })
+`;
+  }
+
+  systemPrompt += `User's request: ${userPrompt}
+
+Generate only the ${errorContext ? 'CORRECTED' : ''} Python code:`;
+
+  try {
+    console.log(`\nGenerating code (Attempt ${attempt})...`);
+    
+    const response = await genAI.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: systemPrompt,
     });
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`API error: ${JSON.stringify(error)}`);
-    }
-
-    const data = await response.json();
-    let code = data.candidates[0].content.parts[0].text;
-
+    let code = response.candidates[0].content.parts[0].text;
+    
     code = code.replace(/```python\n?/g, '').replace(/```\n?/g, '').trim();
     code = code.replace(/class\s+\w+\s*\(/g, 'class video(');
 
@@ -63,14 +65,17 @@ Generate only the Python code:`;
     const filePath = path.join(videoDir, 'video.py');
     fs.writeFileSync(filePath, code, 'utf8');
 
-    console.log(`✓ Manim code generated successfully!`);
-    console.log(`✓ File saved to: ${filePath}`);
+    console.log(`Code generated and saved (Attempt ${attempt})`);
 
-    return filePath;
-
+    return {
+      filePath,
+      attempt,
+      code
+    };
   } catch (error) {
     console.error('Error generating Manim code:', error);
     throw error;
   }
 }
-export {  generateManimCodeREST };
+
+export { generateManimCodeREST };
