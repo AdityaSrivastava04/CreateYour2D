@@ -21,7 +21,7 @@ app.use(cors({
 }))
 
 import videoGeneratingRoute from "./src/route/generateVideo.route.js"
-
+app.options('*', cors());
 app.use("/api/generate-video-base64",videoGeneratingRoute)
 
 const PORT=8080;
