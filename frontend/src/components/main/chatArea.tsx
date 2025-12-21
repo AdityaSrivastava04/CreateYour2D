@@ -59,7 +59,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     onUpdateMessages([...updatedMessages, loadingMessage]);
 
     try {
-      const response = await axios.post('http://localhost:8080/api/generate-video-base64', {
+      const response = await axios.post("https://create-your2-d.vercel.app/api/generate-video-base64", {
         userPrompt: trimmed, 
       });
 
